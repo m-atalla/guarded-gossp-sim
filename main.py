@@ -1,15 +1,11 @@
 from swarm import Swarm
 
 def main():
-    swarm = Swarm(100, attacker_frac=0.2)
+    swarm = Swarm(100, attacker_frac=0.3, use_guarded_gossip=True)
 
-    itera=0
-    for _ in range(200):
+    for _ in range(300):
         swarm.iteration()
-        itera += 1
-
-    print(int(swarm.report()*100))
-
+    print("Attacker fraction: {}%".format(int(swarm.report()*100)))
 
 if __name__ == '__main__':
     main()

@@ -16,8 +16,10 @@ class Swarm:
     sorted_nodes: list[Node]
     sorted_nodes_desc: list[Node]
     iterations: int
+    nodes_list: list[Node | AttackerNode]
+    use_guarded_gossip: bool
 
-    def __init__(self, n, attacker_frac: float) -> None:
+    def __init__(self, n, attacker_frac: float, use_guarded_gossip: bool) -> None:
         """
         The assumption in GuardedGossip simulation was that 
         the chord was already bootstrapped with stabilized nodes
@@ -41,7 +43,11 @@ class Swarm:
 
         # sort for attack bootstrapping
         self.attacker_nodes = sorted(self.attacker_nodes)
-        self.attacker_nodes = list(reversed(self.attacker_nodes))
+        self.attacker_nodes_desc = list(reversed(self.attacker_nodes))
+        
+
+        # used for tests
+        self.use_guarded_gossip = use_guarded_gossip
 
         for _ in range(n_honest):
             node = Node()
@@ -62,7 +68,9 @@ class Swarm:
             node.set_node_density()
 
         for attacker_id in self.attacker_nodes:
-            self.nodes[attacker_id].pool = self.attacker_nodes
+            self.nodes[attacker_id].pool = self.honest_nodes
+        
+        self.nodes_list = list(self.nodes.values())
 
         self.iterations = 0
 
@@ -85,7 +93,7 @@ class Swarm:
         while node.id in keys:
             node.id = rng.key()
 
-    def init_finger_table(self, new_node: Node):
+    def init_finger_table(self, new_node: Node | AttackerNode):
         if not new_node.honest:
             self.bootstrap_malicious(new_node)
             return
@@ -114,10 +122,9 @@ class Swarm:
             new_node.fingers.append(Finger(next_start, finger_node.id))
 
     def bootstrap_malicious(self, new_node: AttackerNode) -> None:
-        for exp in const.FINGER_EXP:
+        for exp, attacker in zip(const.FINGER_EXP, self.attacker_nodes):
             start = new_node.id + exp
-            attack_finger_node = self.find_attack_successor(start)
-            new_node.fingers.append(Finger(start, attack_finger_node.id))
+            new_node.fingers.append(Finger(start, attacker))
     
     def find_attack_successor(self, query: int) -> Node: 
         for attack_id in self.attacker_nodes:
@@ -125,7 +132,7 @@ class Swarm:
                 return self.nodes[attack_id]
         return self.nodes[self.attacker_nodes[0]] # min value
 
-    def find_attack_predecessor(self, query: int) -> Node: 
+    def find_attack_predecessor(self, query: int, picks: set[int]) -> Node: 
         for attack_id in self.attacker_nodes_desc:
             if attack_id < query:
                 return self.nodes[attack_id]
@@ -149,10 +156,15 @@ class Swarm:
     def iteration(self):
         self.gossip()
         self.iterations += 1
+
         # Protocol workflow
         for node in self.nodes.values():
-            target_node = node.request_finger_table()
-            node.guarded_gossip(self.nodes[target_node])
+            # random list of gossip nodes IDs
+            gossip_ft_reqs = node.gossip_picks()
+
+            for req_id in gossip_ft_reqs:
+                target_node = self.nodes[req_id]
+                node.guarded_gossip(target_node, self.iterations, self.use_guarded_gossip)
 
     def gossip(self):
         """
@@ -161,10 +173,11 @@ class Swarm:
         for src_node in self.nodes.values():
             gossip_targets = src_node.send_gossip()
             for gossip_target in gossip_targets:
-                self.nodes[gossip_target].recv_gossip(src_node)
+                self.nodes[gossip_target].recv_gossip(src_node.id, self.iterations)
 
     def report(self):
         attacker_frac_in_honest = []
+
         for honest_id in self.honest_nodes:
             honest = self.nodes[honest_id]
             attacker_count = 0

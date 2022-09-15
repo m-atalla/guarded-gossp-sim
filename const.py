@@ -13,7 +13,7 @@ MAX_GOSSIPS = M_BITS
 MAX_GUARDS = M_BITS
 
 # Percentage of attacker nodes
-ATTACKER_FRACT = 0.1
+ATTACKER_FRACT = 0.2
 
 
 # Optimal density tolerance factor

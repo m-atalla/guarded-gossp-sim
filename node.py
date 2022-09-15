@@ -1,15 +1,12 @@
 from __future__ import annotations
-from math import dist
 from random import choice, choices
 import rng
 import const
 from time import time_ns
-import matplotlib.pyplot as plt
 
 
 class Node:
     """
-    Node holds offline node information as well as guarded gossip
     lists and offline parts of the guarded gossip protocol
     """
     ip: str
@@ -18,7 +15,6 @@ class Node:
     fingers: list[Finger]
     witnesses: dict[int, int] # key: node ID, value: timestamp
     gossiped: set[int]
-    picked_gossip: set[int]
     guarded: set[int]
     honest: bool
     expected_node_density: float
@@ -29,7 +25,6 @@ class Node:
         self.witnesses = dict() 
         self.guarded = set()
         self.gossiped = set()
-        self.picked_gossip = set()
         self.expected_node_density = 0
         self.honest = True
 
@@ -50,68 +45,71 @@ class Node:
         """
         return self.fingers[rng.finger_idx()]
 
-    def recv_gossip(self, gossip_node: Node):
+    def recv_gossip(self, gossip_node_id: int, iteration: int):
         """
         GuardedGossip invariant: Never trust your gossip
         """
 
-        # when len exceeds max limit delete random nodes
-        # TODO: I think this should be move to seperate procedure exclusive
-        # for guarded gossip lists maintaince.. 
-        # while len(self.gossiped) > const.MAX_GOSSIPS:
-            # self.gossiped.remove(choice(list(self.gossiped)))
+        # if gossiping node was seen in the last 10 iterations it is ignored
+        if gossip_node_id in self.witnesses and self.witnesses[gossip_node_id] > (iteration - 10):
+            return
 
-        # add to gossip set and witnesses
-        for gossip in gossip_node.gossiped:
-            if gossip not in self.picked_gossip:
-                self.gossiped.add(gossip)
-        self.gossiped.add(gossip_node.id)
-        self.witnesses[gossip_node.id] = time_ns()
+        self.gossiped.add(gossip_node_id)
+        self.witnesses[gossip_node_id] = iteration
 
     def send_gossip(self) -> list[int]:
-        return [finger.node for finger in self.fingers]
+        return [f.node for f in self.fingers]
 
-    def guarded_gossip(self, test_node: Node) -> None:
+    def gossip_picks(self) -> list[int]:
+        if len(self.gossiped) == 0:
+            return []
+
+        picks = []
+        pick_range = rng.random.randint(0,3)
+        for _ in range(pick_range):
+            if len(self.gossiped) == 0:
+                continue
+            # pick a node from gossip list
+            gossip_src_id = choice(list(self.gossiped))
+
+            # remove it from gossip list
+            self.gossiped.remove(gossip_src_id)
+            picks.append(gossip_src_id)
+        return picks
+
+    def guarded_gossip(self, test_node: Node, iteration: int, use_guarded_gossip) -> None:
         # update witness entry 
         self.witnesses[test_node.id] = time_ns()
 
-        """
-        if any([self.witness_list_checking(test_node), self.bound_checking(test_node.fingers)]):
-            print("Witness check=", self.witness_list_checking(test_node), end="\t")
-            print("Bound check=", self.bound_checking(test_node.fingers), end="\t\n")
-        """
-        # if test node failed any of the protocol checks its FT
-        # is discarded
-        if not self.bound_checking(test_node.fingers):
+        if not self.bound_checking(test_node.fingers, test_node.ideal_finger_ids) and use_guarded_gossip:
             return
 
-        if not self.witness_list_checking(test_node):
+        if not self.witness_list_checking(test_node) and use_guarded_gossip:
             return
 
         ft_nodes = list(set(test_node.fingers))
-        for guard_node in choices(ft_nodes, k=rng.sample_size()):
-            self.guarded.add(guard_node.id)
-        
 
-    def request_finger_table(self) -> int:
-        if len(self.gossiped) != 0:
-            rand_gossip_node = choice(list(self.gossiped))
-            self.gossiped.remove(rand_gossip_node)
-            self.picked_gossip.add(rand_gossip_node)
-            return rand_gossip_node
-        else:
-            if len(self.picked_gossip) > 0:
-                self.gossiped = set(list(self.picked_gossip))
-                return self.request_finger_table()
-            else:
-                return self.pick_finger().id
+        for node in ft_nodes:
+            self.guarded.add(node.id)
+            self.witnesses[node.id] = iteration
 
+        self.maintain(self.guarded, const.MAX_GUARDS)
+        self.maintain(self.gossiped, const.MAX_GOSSIPS)
 
-    def ft_density(self, finger_table: list[Finger]) -> float:
+    def request_finger_table(self) -> list[Finger]:
+        return self.fingers
+
+    def maintain(self, protocol_list: set[int], n_max: int) -> None:
+        if len(protocol_list) > n_max:
+            delete_limit = len(self.guarded) - n_max
+            for _ in range(delete_limit):
+                protocol_list.remove(choice(list(self.guarded)))
+
+    def ft_density(self, finger_table: list[Finger], ideal_finger_ids: list[int]) -> float:
         # Distance deviation
         distance_sum = 0
         for i, finger in enumerate(finger_table):
-            distance = finger.node - self.ideal_finger_ids[i]
+            distance = finger.node - ideal_finger_ids[i]
             # moves negative values to fall in id space
             if distance < 0:
                 distance += const.UPPER_BOUND
@@ -121,17 +119,18 @@ class Node:
         return (distance_sum / const.M_BITS)
         
     def set_node_density(self) -> None:
-        self.expected_node_density = self.ft_density(self.fingers)
+        self.expected_node_density = self.ft_density(self.fingers, self.ideal_finger_ids)
 
-    def bound_checking(self, presented_finger_table: list[Finger]) -> bool:
+    def bound_checking(self, presented_finger_table: list[Finger], ideal_finger_ids: list[int]) -> bool:
         """
         One of the checks needed to consider other nodes' finger tables (ft)
         attempts to estimate if the received finger table was manipulated
         """
-        node_density = self.ft_density(presented_finger_table)
-
-        # d_g <= t*d
-        return (node_density <= self.expected_node_density * const.D_TOLERANCE)
+        node_density = self.ft_density(presented_finger_table, ideal_finger_ids)
+        
+        tolerance_density = self.expected_node_density * const.D_TOLERANCE
+        # d_g < t*d
+        return (node_density <= tolerance_density)
 
     def best_witness(self, query: int) -> int:
         return min(self.witnesses.keys(), key=lambda w: abs(w - query))
@@ -193,7 +192,7 @@ class Node:
         return "Node -> pred: {}, id: {}, succ: {}".format(self.pred, self.id, self.succ())
 
 """
-Auxilary classes
+Auxilary class
 """
 class Finger:
     start: int
@@ -202,3 +201,6 @@ class Finger:
         self.start = start
         self.node = node
         self.id = node # node is a bit confusing and im too lazy to fix it.
+
+    def __str__(self) -> str:
+        return "Finger: Start={}, Node={}".format(self.start, self.node)

@@ -12,10 +12,13 @@ def ip():
     return (ip, key())
 
 def key() -> int:
-    return int(random.uniform(0, const.UPPER_BOUND))
+    return int(random.uniform(0, const.UPPER_BOUND - 1))
 
 def u8_int():
     return random.randint(0, 255)
 
 def finger_idx() -> int:
     return random.randint(1, const.M_BITS - 1)
+
+def sample_size():
+    return random.randint(15, const.MAX_GUARDS)
