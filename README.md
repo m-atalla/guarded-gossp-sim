@@ -1,6 +1,12 @@
+## Synopsis
+An implementation and simulation experiment of GuardedGossip P2P protocol **GuardedGossip: Secure and Anonymous Node Discovery in Untrustworthy Networks** [doi](https://doi.org/10.1007/978-3-030-90019-9_7)
+
+### Reproduced results
+![](experiment_with_1000_nodes_result.png)
+
 ## Requirements
 - Python 3.10
-- Matplotlib library installed
+- Matplotlib library
 
 
 ## steps to replicate results
